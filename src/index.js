@@ -1,4 +1,3 @@
-/* eslint-env node */
 import postcss from "postcss";
 import valueParser from "postcss-value-parser";
 import { createICSSRules } from "icss-utils";
@@ -11,7 +10,7 @@ const getArg = nodes =>
     : valueParser.stringify(nodes);
 
 const getUrl = node => {
-  if (node.type === "function" && node.value === "url") {
+  if (node.type === "function" && node.value.toLowerCase() === "url") {
     return getArg(node.nodes);
   }
   if (node.type === "string") {
@@ -35,19 +34,16 @@ const parseImport = params => {
   };
 };
 
-const isExternalUrl = url => /^\w+:\/\//.test(url) || url.startsWith("//");
+const defaultFilter = url => !/^\w+:\/\//.test(url) && !url.startsWith("//");
 
-const walkImports = (css, callback) => {
-  css.each(node => {
-    if (node.type === "atrule" && node.name.toLowerCase() === "import") {
-      callback(node);
-    }
-  });
-};
-
-module.exports = postcss.plugin(plugin, () => (css, result) => {
+module.exports = postcss.plugin(plugin, (options = {}) => (css, result) => {
   const imports = {};
-  walkImports(css, atrule => {
+  const filter = options.filter || defaultFilter;
+  css.walkAtRules(/^import$/i, atrule => {
+    // Convert only top-level @import
+    if (atrule.parent.type !== "root") {
+      return;
+    }
     if (atrule.nodes) {
       return result.warn(
         "It looks like you didn't end your @import statement correctly. " +
@@ -61,13 +57,20 @@ module.exports = postcss.plugin(plugin, () => (css, result) => {
         node: atrule
       });
     }
-    if (!isExternalUrl(parsed.url)) {
-      atrule.remove();
-      imports[`'${parsed.url}'`] = {
-        import: "default" +
-          (parsed.media.length === 0 ? "" : ` ${parsed.media}`)
-      };
+    if (filter && !filter(parsed.url)) {
+      return;
     }
+    atrule.remove();
+    imports[
+      `"${parsed.url}"${
+        parsed.media.length > 0 ? ` ${parsed.media.toLowerCase()}` : ""
+      }`
+    ] = {};
   });
+
+  if (Object.keys(imports).length === 0) {
+    return;
+  }
+
   css.prepend(createICSSRules(imports, {}));
 });
